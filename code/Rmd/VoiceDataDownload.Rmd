@@ -1,0 +1,268 @@
+---
+title: "Quality control analysis and feature extraction of mPower voice data V1"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('synapseClient')
+library('knitr')
+library('dplyr')
+library('data.table')
+library('rjson')
+library('plyr')
+library('stringr')
+library('rGithubClient')
+
+synapseLogin()
+synapseCacheDir('/mPower')
+
+# source utility files from ../R/ folder
+file.sources = list.files('../R/',pattern="get*")
+file.sources = sapply(file.sources,function(x){return(paste('../R',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+### Voice metadata table download
+```{r voice.table.download}
+VOICE_ID = 'syn3420254'
+ALL_USED_IDs = VOICE_ID
+VOICE_TBL = synTableQuery(paste("SELECT * FROM",VOICE_ID))
+VOICE = VOICE_TBL@values
+VOICE$rowID = rownames(VOICE)
+
+SURVEY_ID = 'syn3474927'
+ALL_USED_IDs = c(ALL_USED_IDs, SURVEY_ID)
+SURVEY_TBL = synTableQuery(paste('SELECT * FROM',SURVEY_ID)) 
+SURVEY = SURVEY_TBL@values
+```
+Voice data with `r dim(VOICE)[1]` recordings from `r length(unique(VOICE$healthCode))` participants are downloaded from `r VOICE_ID`
+### Data quality check
+`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing audio and countdown. Their record ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse = ',')`
+
+`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)])` records are missing audio alone. Their ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)], collapse=',')`
+
+`r length(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing countdown alone. Their ids are `r paste(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse=',')`
+
+### Download audio_audio m4a files
+```{r audio.download, include=FALSE, eval=FALSE}
+Files = list()
+for (i in 1:ceiling(dim(VOICE)/1000)[1]){
+  write.table(paste0('Downloading chunk ',i,'...'), file='count.txt',append=T, row.names=F, col.names=F)
+  ind.start = (i-1)*1000+1
+  ind.end = min(i*1000, dim(VOICE)[1])
+  Files[[i]] = getVoiceData(VOICE$rowID[ind.start:ind.end], VOICE_TBL, "audio_audio.m4a")  
+}
+Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
+write.table(Files.Name.Mapping, file='audioFileMapping.tsv', sep= '\t',row.names=F, quote=F)
+```
+### Convert audio_audio m4a to wav files
+```{r audio.m4a2wav, include=FALSE, eval=FALSE}
+Files.Present = list.files(path=synapseCacheDir(), pattern='audio_audio.*.tmp', recursive=T)
+
+convertM4A2WAV <- function(file.name){
+  m4a.file = paste(synapseCacheDir(),file.name,sep='/')
+  wav.file = paste(tools::file_path_sans_ext(m4a.file),'wav',sep='.')
+  
+  system(paste('avconv','-i',m4a.file,wav.file))
+}
+Files.conv = lapply(Files.Present, convertM4A2WAV)
+```
+### Unconverted audio_audio m4a files
+```{r unconv.file}
+Files.Name.Mapping = fread('./audioFileMapping.tsv', data.table=F)
+  
+Files.m4a.sansExt = sapply(Files.Name.Mapping$fileLocation,tools::file_path_sans_ext)
+Files.wav.sansExt = sapply(list.files(path=synapseCacheDir(), pattern='audio_audio.*.wav', recursive=T),
+                           function(x){
+                             x = tools::file_path_sans_ext(x);
+                             x = paste(synapseCacheDir(),x,sep='/');
+                             return(x)
+                           })
+tmp = sapply(setdiff(Files.m4a.sansExt,Files.wav.sansExt), function(x) paste0(x,'.tmp'))
+tmp = VOICE[Files.Name.Mapping$rowID[(Files.Name.Mapping$fileLocation %in% tmp)], 'recordId']
+```
+Following `r length(tmp)` m4a audio_audio files cannot be converted into wav files: RecordIDs - `r paste(tmp, collapse = ',')`
+
+### Download audio_countdown m4a files
+```{r countdown.download, include=FALSE, eval=FALSE}
+Files = list()
+for (i in 1:ceiling(dim(VOICE)/1000)[1]){
+  write.table(paste0('Downloading chunk ',i,'...'), file='count.txt',append=T, row.names=F, col.names=F)
+  ind.start = (i-1)*1000+1
+  ind.end = min(i*1000, dim(VOICE)[1])
+  Files[[i]] = getVoiceData(VOICE$rowID[ind.start:ind.end], VOICE_TBL, "audio_countdown.m4a")  
+}
+Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
+write.table(Files.Name.Mapping, file='countdownFileMapping.tsv', sep= '\t',row.names=F, quote=F)
+```
+### Convert audio_countdown m4a to wav files
+```{r countdown.m4a2wav, include=FALSE, eval=FALSE}
+Files.Present = list.files(path=synapseCacheDir(), pattern='audio_countdown.*.tmp', recursive=T)
+
+Files.conv = lapply(Files.Present, convertM4A2WAV)
+```
+### Unconverted audio_countdown m4a files
+```{r unconv.countdown.file}
+Files.Name.Mapping = fread('./countdownFileMapping.tsv', data.table=F)
+  
+Files.m4a.sansExt = sapply(Files.Name.Mapping$fileLocation,tools::file_path_sans_ext)
+Files.wav.sansExt = sapply(list.files(path=synapseCacheDir(), pattern='audio_countdown.*.wav', recursive=T),
+                           function(x){
+                             x = tools::file_path_sans_ext(x);
+                             x = paste(synapseCacheDir(),x,sep='/');
+                             return(x)
+                           })
+tmp = sapply(setdiff(Files.m4a.sansExt,Files.wav.sansExt), function(x) paste0(x,'.tmp'))
+tmp = VOICE[Files.Name.Mapping$rowID[(Files.Name.Mapping$fileLocation %in% tmp)], 'recordId']
+```
+Following `r length(tmp)` m4a audio_countdown files cannot be converted into wav files: RecordIDs - `r paste(tmp, collapse = ',')`
+
+### Download json files
+```{r json.download, include=FALSE, eval=FALSE}
+Files = list()
+for (i in 1:ceiling(dim(VOICE)/1000)[1]){
+  write.table(paste0('Downloading chunk ',i,'...'), file='count.txt',append=T, row.names=F, col.names=F)
+  ind.start = (i-1)*1000+1
+  ind.end = min(i*1000, dim(VOICE)[1])
+  Files[[i]] = getVoiceData(VOICE$rowID[ind.start:ind.end], VOICE_TBL, "momentInDayFormat.json")  
+}
+Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
+write.table(Files.Name.Mapping, file='jsonFileMapping.tsv', sep= '\t',row.names=F, quote=F)
+```
+```{r extract.json}
+Files.Name.Mapping = fread('./jsonFileMapping.tsv', data.table=F)
+setnames(Files.Name.Mapping, 'fileLocation', 'jsonFileLocation')
+
+choiceAnswers = sapply(Files.Name.Mapping$jsonFileLocation, function(x){return(fromJSON(file = x)$choiceAnswers)})
+l = sapply(choiceAnswers, length)
+choiceAnswers[l==0] = lapply(choiceAnswers[l==0], function(x) x= NA)
+choiceAnswers = ldply(choiceAnswers)
+colnames(choiceAnswers) = c('jsonFileLocation','choiceAnswer')
+
+VOICE = unique(merge(VOICE, merge(Files.Name.Mapping, choiceAnswers, by = 'jsonFileLocation', all = T), by = 'rowID', all = T))
+```
+### Extract voice features from audio and countdown files
+Source extraction is performed in matlab with signal processing toolbox and the results are imported here
+```{r feature.extraction.audio}
+Audio = fread('/mnt1/Github/mPower_Data_Analysis/code//Matlab//Audio_Features.csv', data.table = F)
+setnames(Audio, 'Row', 'audioFileLocation.wav')
+colnames(Audio)[2:14] = paste('audio', colnames(Audio)[2:14], sep = '.')
+
+AudioFileNames = fread('./audioFileMapping.tsv', data.table=F)
+setnames(AudioFileNames, 'fileLocation', 'audioFileLocation.m4a')
+AudioFileNames = dplyr::mutate(AudioFileNames, audioFileLocation.wav = gsub('.tmp','.wav',audioFileLocation.m4a))
+
+# Merge file name mapping and features
+VOICE = unique(merge(VOICE, merge(Audio, AudioFileNames, by='audioFileLocation.wav', all = T), by = 'rowID', all = T))
+```
+```{r feature.extraction.countdown}
+Countdown = fread('/mnt1/Github/mPower_Data_Analysis/code/Matlab//Countdown_Features.csv', data.table=F)
+setnames(Countdown, 'Row', 'countdownFileLocation.wav')
+colnames(Countdown)[2:14] = paste('countdown', colnames(Countdown)[2:14], sep = '.')
+
+CountdownFileNames = fread('./countdownFileMapping.tsv', data.table=F)
+setnames(CountdownFileNames, 'fileLocation', 'countdownFileLocation.m4a')
+CountdownFileNames = dplyr::mutate(CountdownFileNames, countdownFileLocation.wav = gsub('.tmp','.wav',countdownFileLocation.m4a))
+
+# Merge file name mapping and features
+VOICE = unique(merge(VOICE, merge(Countdown, CountdownFileNames, by='countdownFileLocation.wav', all = T), by = 'rowID', all = T))
+```
+### Extract survey data
+```{r extract.survey}
+FactCovars = c("healthCode","appVersion","phoneInfo","are-caretaker","deep-brain-stimulation","diagnosis-year","education","employment","gender","maritalStatus","professional-diagnosis","race","smartphone","smoked","surgery","years-smoking")
+ContCovars = c("age")
+SURVEY = SURVEY[,c(FactCovars, ContCovars)]
+
+# Replace all alpha numeric characters in the metadata
+myFix1 <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
+
+# Substitute empty cells with NA 
+myFix2 <- function(x){ 
+  z <- gsub("\\s+", "", x)  #make sure it's "" and not " " etc
+  x[z==""] <- NA 
+  return(x)
+}
+
+SURVEY <- SURVEY %>%
+  dplyr::mutate_each(funs(myFix1), -healthCode, -appVersion, -phoneInfo) %>%
+  dplyr::mutate_each(funs(myFix2), -healthCode, -appVersion, -phoneInfo) %>%
+  unique
+
+# Convert factor covariates to factors
+SURVEY[,FactCovars] = lapply(SURVEY[,FactCovars], factor)
+SURVEY[,ContCovars] = lapply(SURVEY[,ContCovars], as.numeric)
+
+# Find voice data without any recordIds
+No.health.record = setdiff(unique(VOICE$healthCode),unique(SURVEY$healthCode))
+
+# Merge survey and voice data
+VOICE.ALL = unique(merge(VOICE, SURVEY, by = 'healthCode', all.x = T, all.y = F))
+```
+Following `r length(No.health.record)` voice recordings doesn't have matching metadata: `r paste(No.health.record,collapse=',')`
+### Store data in synapse
+```{r synapse.store}
+# Synapse store parameters
+projectId <- "syn4557550"
+parentId <- projectId
+
+ActivityName <- 'Feature extraction and quality control analysis of voice data'
+  
+thisFileName <- 'VoiceDataDownload.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/mPower_Data_Analysis", 
+                    ref="branch", 
+                    refName='master')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+
+# Code
+CODE <- File('./VoiceDataDownload.Rmd',name = 'Phonation Feature Extraction and Quality Control',parentId = parentId)
+CODE <- synStore(CODE, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
+
+# Data file
+colnames(VOICE.ALL) = gsub('\\.', '_', colnames(VOICE.ALL)) 
+colnames(VOICE.ALL) = gsub('-', '_', colnames(VOICE.ALL)) 
+
+write.table(VOICE.ALL, file = './Phonation_Features_Metadata.tsv', sep = '\t', row.names=F, quote=F)
+TBL_File <- File('./Phonation_Features_Metadata.tsv',name = 'Phonation Feature Extraction and Quality Control',parentId = parentId)
+TBL_File <- synStore(TBL_File, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
+
+# Data table
+TC <- as.tableColumns(VOICE.ALL)
+TC$tableColumns = lapply(TC$tableColumns, 
+                         function(x){ 
+                           if(x@columnType == 'STRING')
+                             x@maximumSize = 100L
+                           return(x)
+                         });
+
+ind = grep('FileLocation', colnames(VOICE.ALL))
+TC$tableColumns[ind] = lapply(TC$tableColumns[ind], 
+                              function(x){ 
+                                if(x@columnType == 'STRING')
+                                  x@maximumSize = 500L
+                                return(x)
+                                });
+
+TS <- TableSchema(name="Phonation Features and Metadata V1", parent=projectId, columns=TC$tableColumns)
+TBL_OBJ <- Table(TS, TC$fileHandleId)
+TBL_OBJ <- synStore(TBL_OBJ)
+```
