@@ -6,7 +6,7 @@ output: html_document
 ---
 ```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
 ## It is assumed your working directory is where this file is
-
+# 
 # Clear R console screen output
 cat("\014")  
 
@@ -20,6 +20,7 @@ library('plyr')
 library('stringr')
 library('rGithubClient')
 library('devtools')
+library('knit2synapse')
 
 # devtools::install_github(repo = "knit2synapse-1", username = "th1vairam", ref="dev")
 # library(knit2synapse)
@@ -41,20 +42,25 @@ knitr::opts_chunk$set(
   message=FALSE,
   error = FALSE,
   tidy = FALSE,
-  cache = TRUE)
+  cache = FALSE)
 ```
 ### Voice metadata table download
 ```{r voice.table.download}
-VOICE_ID = 'syn3420254'
+VOICE_ID = 'syn4590865';#'syn3420254'
 ALL_USED_IDs = VOICE_ID
 VOICE_TBL = synTableQuery(paste("SELECT * FROM",VOICE_ID))
 VOICE = VOICE_TBL@values
 VOICE$rowID = rownames(VOICE)
 
-SURVEY_ID = 'syn3474927'
+SURVEY_ID = 'syn4590867';#'syn3474927'
 ALL_USED_IDs = c(ALL_USED_IDs, SURVEY_ID)
 SURVEY_TBL = synTableQuery(paste('SELECT * FROM',SURVEY_ID)) 
 SURVEY = SURVEY_TBL@values
+
+UPDRS_ID = 'syn4590868'
+ALL_USED_IDs = c(ALL_USED_IDs, UPDRS_ID)
+UPDRS_TBL = synTableQuery(paste('SELECT * FROM',UPDRS_ID)) 
+UPDRS = UPDRS_TBL@values
 ```
 Voice data with `r dim(VOICE)[1]` recordings from `r length(unique(VOICE$healthCode))` participants are downloaded from `r VOICE_ID`
 ### Data quality check
@@ -84,7 +90,7 @@ convertM4A2WAV <- function(file.name){
   m4a.file = paste(synapseCacheDir(),file.name,sep='/')
   wav.file = paste(tools::file_path_sans_ext(m4a.file),'wav',sep='.')
   
-  system(paste('avconv','-i',m4a.file,wav.file))
+  system(paste('avconv','-i',m4a.file,'-b 64k',wav.file))
 }
 Files.conv = lapply(Files.Present, convertM4A2WAV)
 ```
@@ -150,7 +156,7 @@ for (i in 1:ceiling(dim(VOICE)/1000)[1]){
 Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
 write.table(Files.Name.Mapping, file='jsonFileMapping.tsv', sep= '\t',row.names=F, quote=F)
 ```
-```{r extract.json}
+```{r extract.json, eval=FALSE}
 Files.Name.Mapping = fread('./jsonFileMapping.tsv', data.table=F)
 setnames(Files.Name.Mapping, 'fileLocation', 'jsonFileLocation')
 
@@ -165,7 +171,7 @@ VOICE = unique(merge(VOICE, merge(Files.Name.Mapping, choiceAnswers, by = 'jsonF
 ### Extract voice features from audio and countdown files
 Source extraction is performed in matlab with signal processing toolbox and the results are imported here
 ```{r feature.extraction.audio}
-Audio = fread('/mnt1/Github/mPower_Data_Analysis/code//Matlab//Audio_Features.csv', data.table = F)
+Audio = fread('/mnt/Github/mPower_Data_Analysis/code//Matlab//Audio_Features.csv', data.table = F)
 setnames(Audio, 'Row', 'audioFileLocation.wav')
 colnames(Audio)[2:14] = paste('audio', colnames(Audio)[2:14], sep = '.')
 
@@ -177,7 +183,7 @@ AudioFileNames = dplyr::mutate(AudioFileNames, audioFileLocation.wav = gsub('.tm
 VOICE = unique(merge(VOICE, merge(Audio, AudioFileNames, by='audioFileLocation.wav', all = T), by = 'rowID', all = T))
 ```
 ```{r feature.extraction.countdown}
-Countdown = fread('/mnt1/Github/mPower_Data_Analysis/code/Matlab//Countdown_Features.csv', data.table=F)
+Countdown = fread('/mnt/Github/mPower_Data_Analysis/code/Matlab//Countdown_Features.csv', data.table=F)
 setnames(Countdown, 'Row', 'countdownFileLocation.wav')
 colnames(Countdown)[2:14] = paste('countdown', colnames(Countdown)[2:14], sep = '.')
 
@@ -190,9 +196,10 @@ VOICE = unique(merge(VOICE, merge(Countdown, CountdownFileNames, by='countdownFi
 ```
 ### Extract survey data
 ```{r extract.survey}
-FactCovars = c("healthCode","appVersion","phoneInfo","are-caretaker","deep-brain-stimulation","diagnosis-year","education","employment","gender","maritalStatus","professional-diagnosis","race","smartphone","smoked","surgery")
-ContCovars = c("years-smoking", "age")
-SURVEY = SURVEY[,c(FactCovars, ContCovars)]
+FactCovars = c("healthCode","appVersion","phoneInfo","are-caretaker","deep-brain-stimulation","diagnosis-year","education","employment","gender","healthcare-provider","maritalStatus","medical-usage","medical-usage-yesterday","onset-year","professional-diagnosis","race","smartphone","smoked","surgery")
+ContCovars = c("age","years-smoking")
+DateVars = c("uploadDate","createdOn","last-smoked")
+SURVEY = SURVEY[,c(FactCovars, ContCovars, DateVars)]
 
 # Replace all alpha numeric characters in the metadata
 myFix1 <- function(x) str_replace_all(x, '[^[:alnum:]]', '')
@@ -204,22 +211,42 @@ myFix2 <- function(x){
   return(x)
 }
 
-SURVEY <- SURVEY %>%
+SURVEY[,FactCovars] <- SURVEY[,FactCovars] %>%
   dplyr::mutate_each(funs(myFix1), -healthCode, -appVersion, -phoneInfo) %>%
-  dplyr::mutate_each(funs(myFix2), -healthCode, -appVersion, -phoneInfo) %>%
-  unique
+  dplyr::mutate_each(funs(myFix2), -healthCode, -appVersion, -phoneInfo) 
 
 # Convert factor covariates to factors
 SURVEY[,FactCovars] = lapply(SURVEY[,FactCovars], factor)
 SURVEY[,ContCovars] = lapply(SURVEY[,ContCovars], as.numeric)
+SURVEY[,DateVars] = lapply(SURVEY[,DateVars], as.POSIXct)
+
+SURVEY <- SURVEY[!duplicated(SURVEY$healthCode),]
 
 # Find voice data without any recordIds
 No.health.record = setdiff(unique(VOICE$healthCode),unique(SURVEY$healthCode))
-
-# Merge survey and voice data
-VOICE.ALL = unique(merge(VOICE, SURVEY, by = 'healthCode', all.x = T, all.y = F))
 ```
 Following `r length(No.health.record)` voice recordings doesn't have matching metadata: `r paste(No.health.record,collapse=',')`
+### Extract UPDRS data
+```{r extract.survey}
+FactCovars = c("healthCode", "appVersion", "phoneInfo", "EQ-5D1", "GELTQ-1a", "GELTQ-1b", "GELTQ-1c", "GELTQ-2", "MDS-UPRDRS1.1", "MDS-UPDRS1.3",
+               "MDS-UPDRS1.4", "MDS-UPDRS1.5","MDS-UPDRS1.7","MDS-UPDRS1.8","MDS-UPDRS2.1", "MDS-UPDRS2.4", "MDS-UPDRS2.5", "MDS-UPDRS2.6", 
+               "MDS-UPDRS2.7", "MDS-UPDRS2.8", "MDS-UPDRS2.9", "MDS-UPDRS2.10", "MDS-UPDRS2.12", "MDS-UPDRS2.13")
+DateVars = c("uploadDate","createdOn")
+UPDRS = UPDRS[,c(FactCovars, DateVars)]
+
+# Replace all special characters in UPDRS
+UPDRS[,FactCovars] <- UPDRS[,FactCovars] %>%
+  dplyr::mutate_each(funs(myFix1), -healthCode, -appVersion, -phoneInfo) %>%
+  dplyr::mutate_each(funs(myFix2), -healthCode, -appVersion, -phoneInfo) 
+
+# Convert factor covariates to factors
+UPDRS[,FactCovars] = lapply(UPDRS[,FactCovars], factor)
+UPDRS[,DateVars] = lapply(UPDRS[,DateVars], as.POSIXct)
+
+# Find voice data without any recordIds
+No.UPDRS = setdiff(unique(VOICE$healthCode),unique(UPDRS$healthCode))
+```
+Following `r length(No.UPDRS)` voice recordings doesn't have matching UPDRS: `r paste(No.UPDRS,collapse=',')`
 ### Store data in synapse
 ```{r synapse.store, include=FALSE}
 # Synapse store parameters
@@ -243,34 +270,22 @@ CODE <- File('./VoiceDataDownload.Rmd',name = 'Phonation Feature Extraction and 
 CODE <- synStore(CODE, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
 # Data file
-colnames(VOICE.ALL) = gsub('\\.', '_', colnames(VOICE.ALL)) 
-colnames(VOICE.ALL) = gsub('-', '_', colnames(VOICE.ALL)) 
+write.table(VOICE, file = './Phonation_Features.tsv', sep = '\t', row.names=F, quote=F)
+VOICE_OBJ <- File('./Phonation_Features.tsv',name = 'Phonation',parentId = parentId)
+VOICE_OBJ <- synStore(VOICE_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
-write.table(VOICE.ALL, file = './Phonation_Features_Metadata.tsv', sep = '\t', row.names=F, quote=F)
-TBL_File <- File('./Phonation_Features_Metadata.tsv',name = 'Phonation Feature Extraction and Quality Control Data',parentId = parentId)
-TBL_File <- synStore(TBL_File, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
+# Data file
+write.table(SURVEY, file = './SURVEY.tsv', sep = '\t', row.names=F, quote=F)
+SUR_OBJ <- File('./SURVEY.tsv',name = 'Survey',parentId = parentId)
+SUR_OBJ <- synStore(SUR_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
-# Data table
-TC <- as.tableColumns(VOICE.ALL)
-TC$tableColumns = lapply(TC$tableColumns, 
-                         function(x){ 
-                           if(x@columnType == 'STRING')
-                             x@maximumSize = 100L
-                           return(x)
-                         });
-
-ind = grep('FileLocation', colnames(VOICE.ALL))
-TC$tableColumns[ind] = lapply(TC$tableColumns[ind], 
-                              function(x){ 
-                                if(x@columnType == 'STRING')
-                                  x@maximumSize = 500L
-                                return(x)
-                                });
-
-TS <- TableSchema(name="Phonation Features and Metadata V1", parent=projectId, columns=TC$tableColumns)
-TBL_OBJ <- Table(TS, TC$fileHandleId)
-TBL_OBJ <- synStore(TBL_OBJ)
+# Data file
+write.table(UPDRS, file = './UPDRS.tsv', sep = '\t', row.names=F, quote=F)
+UPDRS_OBJ <- File('./UPDRS.tsv',name = 'UPDRS',parentId = parentId)
+UPDRS_OBJ <- synStore(UPDRS_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 ```
 |  *Results*           |  *SynapseID*                  |
 |  -------             |   ---------                   |
-|  Extracted Features  |  `r paste(TBL_OBJ@schema@properties@properties@stringAnnotations$id,TBL_OBJ@schema@properties@properties@stringAnnotations$versionLabel,sep='.')` |
+|  VOICE DATA          |  `r paste(VOICE_OBJ$properties$id,VOICE_OBJ$properties$id, sep ='.')`                  |
+|  SURVEY DATA         |  `r paste(SUR_OBJ$properties$id,SUROBJ$properties$id, sep ='.')`                       |
+|  UPDRS DATA          |  `r paste(UPDRS_OBJ$properties$id,UPDRS_OBJ$properties$id, sep ='.')`                  |
