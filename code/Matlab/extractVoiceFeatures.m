@@ -4,7 +4,7 @@ close all
 clc
 
 % Add Max code's to search path 
-addpath('/mnt1/Github/PDScores/bridge_ufb (original)')
+addpath('/mnt/Github/PDScores/bridge_ufb (original)')
 
 % Search all wav files in mPower directory
 [success,message,messageid] = fileattrib('/mPower/*');
@@ -51,4 +51,4 @@ Countdown_Features = array2table(Countdown_Features,'RowNames',File_Names(~~(ind
     'VariableNames',{'Median_F0','Mean_Jitter','Median_Jitter','Mean_Shimmer','Median_Shimmer',...
     'MFCC_Band_1','MFCC_band_2','MFCC_band_3','MFCC_band_4','MFCC_Jitter_band_1_Positive',...
     'MFCC_Jitter_band_2_Positive','MFCC_Jitter_band_3_Positive','MFCC_Jitter_band_4_Positive'});
-writetable(Countdown_Features, 'Countdown_Features.csv', 'Delimiter', '\t');
+writetable(Countdown_Features, 'Countdown_Features.csv', 'Delimiter', '\t', 'WriteRownames',true);
