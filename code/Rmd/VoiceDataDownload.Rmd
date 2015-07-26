@@ -6,7 +6,7 @@ output: html_document
 ---
 ```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
 ## It is assumed your working directory is where this file is
-# 
+ 
 # Clear R console screen output
 cat("\014")  
 
@@ -44,6 +44,7 @@ knitr::opts_chunk$set(
   tidy = FALSE,
   cache = FALSE)
 ```
+
 ### Voice metadata table download
 ```{r voice.table.download}
 VOICE_ID = 'syn4590865';#'syn3420254'
@@ -63,12 +64,19 @@ UPDRS_TBL = synTableQuery(paste('SELECT * FROM',UPDRS_ID))
 UPDRS = UPDRS_TBL@values
 ```
 Voice data with `r dim(VOICE)[1]` recordings from `r length(unique(VOICE$healthCode))` participants are downloaded from `r VOICE_ID`
+
 ### Data quality check
-`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing audio and countdown. Their record ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse = ',')`
+`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing audio and countdown. 
 
-`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)])` records are missing audio alone. Their ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)], collapse=',')`
+Their record ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse = ',')`
 
-`r length(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing countdown alone. Their ids are `r paste(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse=',')`
+`r length(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)])` records are missing audio alone. 
+
+Their ids are `r paste(VOICE$recordId[is.na(VOICE$audio_audio.m4a) & !is.na(VOICE$audio_countdown.m4a)], collapse=',')`
+
+`r length(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)])` records are missing countdown alone. 
+
+Their ids are `r paste(VOICE$recordId[!is.na(VOICE$audio_audio.m4a) & is.na(VOICE$audio_countdown.m4a)], collapse=',')`
 
 ### Download audio_audio m4a files
 ```{r audio.download, include=FALSE, eval=FALSE}
@@ -82,6 +90,7 @@ for (i in 1:ceiling(dim(VOICE)/1000)[1]){
 Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
 write.table(Files.Name.Mapping, file='audioFileMapping.tsv', sep= '\t',row.names=F, quote=F)
 ```
+
 ### Convert audio_audio m4a to wav files
 ```{r audio.m4a2wav, include=FALSE, eval=FALSE}
 Files.Present = list.files(path=synapseCacheDir(), pattern='audio_audio.*.tmp', recursive=T)
@@ -94,6 +103,7 @@ convertM4A2WAV <- function(file.name){
 }
 Files.conv = lapply(Files.Present, convertM4A2WAV)
 ```
+
 ### Unconverted audio_audio m4a files
 ```{r unconv.file}
 Files.Name.Mapping = fread('./audioFileMapping.tsv', data.table=F)
@@ -108,7 +118,9 @@ Files.wav.sansExt = sapply(list.files(path=synapseCacheDir(), pattern='audio_aud
 tmp = sapply(setdiff(Files.m4a.sansExt,Files.wav.sansExt), function(x) paste0(x,'.tmp'))
 tmp = VOICE[Files.Name.Mapping$rowID[(Files.Name.Mapping$fileLocation %in% tmp)], 'recordId']
 ```
-Following `r length(tmp)` m4a audio_audio files cannot be converted into wav files: RecordIDs - `r paste(tmp, collapse = ',')`
+Following `r length(tmp)` m4a audio_audio files cannot be converted into wav files: 
+
+RecordIDs - `r paste(tmp, collapse = ',')`
 
 ### Download audio_countdown m4a files
 ```{r countdown.download, include=FALSE, eval=FALSE}
@@ -122,12 +134,14 @@ for (i in 1:ceiling(dim(VOICE)/1000)[1]){
 Files.Name.Mapping = rbindlist(lapply(Files, function(x){tmp = data.frame(rowID = names(x$fnms), fileLocation = x$fnms)}))
 write.table(Files.Name.Mapping, file='countdownFileMapping.tsv', sep= '\t',row.names=F, quote=F)
 ```
+
 ### Convert audio_countdown m4a to wav files
 ```{r countdown.m4a2wav, include=FALSE, eval=FALSE}
 Files.Present = list.files(path=synapseCacheDir(), pattern='audio_countdown.*.tmp', recursive=T)
 
 Files.conv = lapply(Files.Present, convertM4A2WAV)
 ```
+
 ### Unconverted audio_countdown m4a files
 ```{r unconv.countdown.file}
 Files.Name.Mapping = fread('./countdownFileMapping.tsv', data.table=F)
@@ -142,7 +156,9 @@ Files.wav.sansExt = sapply(list.files(path=synapseCacheDir(), pattern='audio_cou
 tmp = sapply(setdiff(Files.m4a.sansExt,Files.wav.sansExt), function(x) paste0(x,'.tmp'))
 tmp = VOICE[Files.Name.Mapping$rowID[(Files.Name.Mapping$fileLocation %in% tmp)], 'recordId']
 ```
-Following `r length(tmp)` m4a audio_countdown files cannot be converted into wav files: RecordIDs - `r paste(tmp, collapse = ',')`
+Following `r length(tmp)` m4a audio_countdown files cannot be converted into wav files: 
+
+RecordIDs - `r paste(tmp, collapse = ',')`
 
 ### Download json files
 ```{r json.download, include=FALSE, eval=FALSE}
@@ -180,7 +196,7 @@ setnames(AudioFileNames, 'fileLocation', 'audioFileLocation.m4a')
 AudioFileNames = dplyr::mutate(AudioFileNames, audioFileLocation.wav = gsub('.tmp','.wav',audioFileLocation.m4a))
 
 # Merge file name mapping and features
-VOICE = unique(merge(VOICE, merge(Audio, AudioFileNames, by='audioFileLocation.wav', all = T), by = 'rowID', all = T))
+VOICE = unique(merge(VOICE, merge(AudioFileNames, Audio, by='audioFileLocation.wav', all.x = T), by = 'rowID', all = T))
 ```
 ```{r feature.extraction.countdown}
 Countdown = fread('/mnt/Github/mPower_Data_Analysis/code/Matlab//Countdown_Features.csv', data.table=F)
@@ -192,7 +208,7 @@ setnames(CountdownFileNames, 'fileLocation', 'countdownFileLocation.m4a')
 CountdownFileNames = dplyr::mutate(CountdownFileNames, countdownFileLocation.wav = gsub('.tmp','.wav',countdownFileLocation.m4a))
 
 # Merge file name mapping and features
-VOICE = unique(merge(VOICE, merge(Countdown, CountdownFileNames, by='countdownFileLocation.wav', all = T), by = 'rowID', all = T))
+VOICE = unique(merge(VOICE, merge( CountdownFileNames, Countdown, by='countdownFileLocation.wav', all.x = T), by = 'rowID', all = T))
 ```
 ### Extract survey data
 ```{r extract.survey}
@@ -225,9 +241,10 @@ SURVEY <- SURVEY[!duplicated(SURVEY$healthCode),]
 # Find voice data without any recordIds
 No.health.record = setdiff(unique(VOICE$healthCode),unique(SURVEY$healthCode))
 ```
-Following `r length(No.health.record)` voice recordings doesn't have matching metadata: `r paste(No.health.record,collapse=',')`
+`r length(No.health.record)` voice recordings doesn't have matching metadata
+
 ### Extract UPDRS data
-```{r extract.survey}
+```{r extract.UPDRS}
 FactCovars = c("healthCode", "appVersion", "phoneInfo", "EQ-5D1", "GELTQ-1a", "GELTQ-1b", "GELTQ-1c", "GELTQ-2", "MDS-UPRDRS1.1", "MDS-UPDRS1.3",
                "MDS-UPDRS1.4", "MDS-UPDRS1.5","MDS-UPDRS1.7","MDS-UPDRS1.8","MDS-UPDRS2.1", "MDS-UPDRS2.4", "MDS-UPDRS2.5", "MDS-UPDRS2.6", 
                "MDS-UPDRS2.7", "MDS-UPDRS2.8", "MDS-UPDRS2.9", "MDS-UPDRS2.10", "MDS-UPDRS2.12", "MDS-UPDRS2.13")
@@ -246,7 +263,8 @@ UPDRS[,DateVars] = lapply(UPDRS[,DateVars], as.POSIXct)
 # Find voice data without any recordIds
 No.UPDRS = setdiff(unique(VOICE$healthCode),unique(UPDRS$healthCode))
 ```
-Following `r length(No.UPDRS)` voice recordings doesn't have matching UPDRS: `r paste(No.UPDRS,collapse=',')`
+Following `r length(No.UPDRS)` voice recordings doesn't have matching UPDRS
+
 ### Store data in synapse
 ```{r synapse.store, include=FALSE}
 # Synapse store parameters
@@ -270,22 +288,22 @@ CODE <- File('./VoiceDataDownload.Rmd',name = 'Phonation Feature Extraction and 
 CODE <- synStore(CODE, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
 # Data file
-write.table(VOICE, file = './Phonation_Features.tsv', sep = '\t', row.names=F, quote=F)
+write.table(VOICE, file = './Phonation_Features.tsv', sep = '\t', row.names=F, quote=T)
 VOICE_OBJ <- File('./Phonation_Features.tsv',name = 'Phonation',parentId = parentId)
 VOICE_OBJ <- synStore(VOICE_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
 # Data file
-write.table(SURVEY, file = './SURVEY.tsv', sep = '\t', row.names=F, quote=F)
+write.table(SURVEY, file = './SURVEY.tsv', sep = '\t', row.names=F, quote=T)
 SUR_OBJ <- File('./SURVEY.tsv',name = 'Survey',parentId = parentId)
 SUR_OBJ <- synStore(SUR_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 
 # Data file
-write.table(UPDRS, file = './UPDRS.tsv', sep = '\t', row.names=F, quote=F)
+write.table(UPDRS, file = './UPDRS.tsv', sep = '\t', row.names=F, quote=T)
 UPDRS_OBJ <- File('./UPDRS.tsv',name = 'UPDRS',parentId = parentId)
 UPDRS_OBJ <- synStore(UPDRS_OBJ, used = ALL_USED_IDs, activityName = ActivityName, executed = thisFile)
 ```
 |  *Results*           |  *SynapseID*                  |
 |  -------             |   ---------                   |
-|  VOICE DATA          |  `r paste(VOICE_OBJ$properties$id,VOICE_OBJ$properties$id, sep ='.')`                  |
-|  SURVEY DATA         |  `r paste(SUR_OBJ$properties$id,SUROBJ$properties$id, sep ='.')`                       |
-|  UPDRS DATA          |  `r paste(UPDRS_OBJ$properties$id,UPDRS_OBJ$properties$id, sep ='.')`                  |
+|  VOICE DATA          |  `r paste(VOICE_OBJ$properties$id,VOICE_OBJ$properties$versionNumber, sep ='.')`                  |
+|  SURVEY DATA         |  `r paste(SUR_OBJ$properties$id,SUR_OBJ$properties$versionNumber,sep ='.')`                       |
+|  UPDRS DATA          |  `r paste(UPDRS_OBJ$properties$id,UPDRS_OBJ$properties$versionNumber, sep ='.')`                  |
