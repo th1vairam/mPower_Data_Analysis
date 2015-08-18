@@ -1,0 +1,260 @@
+---
+title: "Classifying UPDRS scores based on phonation features"
+author: "Thanneer Perumal"
+date: "`r date()`"
+output: html_document
+---
+```{r libs, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+## It is assumed your working directory is where this file is
+
+# Clear R console screen output
+cat("\014")  
+
+# Load required libraries
+library('synapseClient')
+library('knitr')
+library('dplyr')
+library('data.table')
+library('rjson')
+library('plyr')
+library('stringr')
+library('rGithubClient')
+library('devtools')
+library('ggplot2')
+library('reshape2')
+library('psych')
+library('fpc')
+library('RColorBrewer')
+library('knit2synapse')
+
+# knit2synapse::storeAndKnitToFileEntity('./UPDRS_Analysis.Rmd', entityName = 'UPDRS Analysis', parentId = "syn4557550")
+
+## Requires ggdendro
+devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
+
+synapseLogin()
+# synapseCacheDir('/mPower')
+parentId = 'syn4557550'
+
+# source utility files from ../R/ folder
+file.sources = list.files('../R/lib/',pattern="*")
+file.sources = sapply(file.sources,function(x){return(paste('../R/lib',x,sep='/'))})
+tmp = sapply(file.sources,source,.GlobalEnv)
+
+options(xtable.type="html")
+
+knitr::opts_chunk$set(
+  echo=FALSE,
+  warning=FALSE,
+  message=FALSE,
+  error = FALSE,
+  tidy = FALSE,
+  cache = TRUE)
+```
+
+### Voice metadata table download
+```{r voice.table.download}
+VOICE_ID = 'syn4726961'
+ALL_USED_IDs = VOICE_ID
+VOICE = fread(synGet(VOICE_ID)@filePath, data.table=F); 
+
+SURVEY_ID = 'syn4726964'
+ALL_USED_IDs = c(ALL_USED_IDs, SURVEY_ID)
+SURVEY = fread(synGet(SURVEY_ID)@filePath, data.table=F)
+
+UPDRS_ID = 'syn4726968'
+ALL_USED_IDs = c(ALL_USED_IDs, UPDRS_ID)
+UPDRS = fread(synGet(UPDRS_ID)@filePath, data.table=F)
+```
+### Merge voice and survey
+```{r merge.voice.survey}
+# Merge voice and survey data
+setnames(VOICE, c("uploadDate","createdOn"), paste(c("uploadDate","createdOn"),'voice',sep='.')) 
+setnames(SURVEY, c("uploadDate","createdOn"), paste(c("uploadDate","createdOn"),'survey',sep='.')) 
+VOICE.SURVEY = merge(VOICE,SURVEY, by = c('healthCode','appVersion','phoneInfo'), all=F)
+
+# Remove in complete audio and countdown recordings
+VOICE.SURVEY = VOICE.SURVEY[complete.cases(VOICE.SURVEY[,grep('audio\\.',colnames(VOICE.SURVEY),value=T)]) &
+                              complete.cases(VOICE.SURVEY[,grep('countdown\\.',colnames(VOICE.SURVEY),value=T)]),]
+colnames(VOICE.SURVEY) = sapply(colnames(VOICE.SURVEY), str_replace_all,'[^[:alnum:]]', '.')
+```
+### Merge voice, survey and updrs data
+```{r merge.voice.survey.updrs}
+# Create data variables to merge
+VOICE.SURVEY <- mutate(VOICE.SURVEY, createdOn.voice = as.POSIXct(createdOn.voice), createdDate = as.Date(createdOn.voice))
+setnames(UPDRS, c("uploadDate","createdOn"), paste(c("uploadDate","createdOn"),'updrs',sep='.')) 
+UPDRS <- mutate(UPDRS, createdOn.updrs = as.POSIXct(createdOn.updrs), createdDate = as.Date(createdOn.updrs))
+
+# Subset data that have both voice and updrs in at least one time
+healthCode = intersect(UPDRS$healthCode, VOICE.SURVEY$healthCode)
+VOICE.SURVEY <- VOICE.SURVEY[VOICE.SURVEY$healthCode %in% healthCode,]
+UPDRS <- UPDRS[UPDRS$healthCode %in% healthCode,]
+
+# Split updrs and voice.survey per participants
+VOICE.SURVEY.PP <- split(VOICE.SURVEY, factor(VOICE.SURVEY$healthCode))
+UPDRS.PP <- split(UPDRS, factor(UPDRS$healthCode))
+
+# Merge UPDRS table to voice survey table
+VOICE.SURVEY.UPDRS.PP = mapply(function(updrs,voice.survey){
+  tmp1 = merge(updrs,voice.survey, by = c("createdDate", "healthCode",  "appVersion",  "phoneInfo"), all = T)
+  return(list(tmp1))
+},
+             UPDRS.PP,
+             VOICE.SURVEY.PP)
+
+VOICE.SURVEY.UPDRS = data.frame(rbindlist(VOICE.SURVEY.UPDRS.PP))
+```
+
+```{r var.of.int}
+# Covariates
+FactCovars =  c("appVersion", "phoneInfo", "EQ.5D1", "GELTQ.1a", "GELTQ.1b", "GELTQ.1c", "GELTQ.2", "MDS.UPRDRS1.1",  "MDS.UPDRS1.3", 
+                "MDS.UPDRS1.4", "MDS.UPDRS1.5", "MDS.UPDRS1.7", "MDS.UPDRS1.8", "MDS.UPDRS2.1", "MDS.UPDRS2.4", "MDS.UPDRS2.5", "MDS.UPDRS2.6", "MDS.UPDRS2.7",
+                "MDS.UPDRS2.8", "MDS.UPDRS2.9", "MDS.UPDRS2.10", "MDS.UPDRS2.12", "MDS.UPDRS2.13", "momentInDayFormat.json.choiceAnswers", 
+                "momentInDayFormat.json.questionTypeName", "calculatedMeds", "are.caretaker", "deep.brain.stimulation", "education", "employment", "gender",
+                "healthcare.provider", "maritalStatus",  "medical.usage", "medical.usage.yesterday", "professional.diagnosis", "race", "smartphone", "smoked",
+                "surgery")
+ContCovars =   c("onset.year", "diagnosis.year", "age", "years.smoking")
+DateVars = c("createdDate", "uploadDate.updrs", "createdOn.updrs", "createdOn.voice", "uploadDate.voice",  "uploadDate.survey", "createdOn.survey", "last.smoked")
+
+# Feature Sets
+updrsFeatures = c("MDS.UPRDRS1.1",  "MDS.UPDRS1.3", "MDS.UPDRS1.4", "MDS.UPDRS1.5", "MDS.UPDRS1.7", "MDS.UPDRS1.8", "MDS.UPDRS2.1", "MDS.UPDRS2.4", 
+                 "MDS.UPDRS2.5", "MDS.UPDRS2.6", "MDS.UPDRS2.7", "MDS.UPDRS2.8", "MDS.UPDRS2.9", "MDS.UPDRS2.10", "MDS.UPDRS2.12", "MDS.UPDRS2.13")
+AudioFeatures = c("audio.Median.F0", "audio.Mean.Jitter", "audio.Median.Jitter", "audio.Mean.Shimmer", "audio.Median.Shimmer",
+                "audio.MFCC.Band.1", "audio.MFCC.band.2", "audio.MFCC.band.3", "audio.MFCC.band.4", "audio.MFCC.Jitter.band.1.Positive",
+                "audio.MFCC.Jitter.band.2.Positive", "audio.MFCC.Jitter.band.3.Positive", "audio.MFCC.Jitter.band.4.Positive")
+CountdownFeatures = c("countdown.Median.F0", "countdown.Mean.Jitter", "countdown.Median.Jitter", "countdown.Mean.Shimmer",
+                "countdown.Median.Shimmer", "countdown.MFCC.Band.1", "countdown.MFCC.band.2", "countdown.MFCC.band.3",
+                "countdown.MFCC.band.4", "countdown.MFCC.Jitter.band.1.Positive", "countdown.MFCC.Jitter.band.2.Positive",
+                "countdown.MFCC.Jitter.band.3.Positive", "countdown.MFCC.Jitter.band.4.Positive")
+```
+
+### Preprocess 
+* Retain recordings with 'version 1.0.5, build 12' and 'version 1.0, build 7'
+* Retain samples with non NA "professional-daignosis"
+* Retain samples with age less than 100 and non NA age
+* Retain samples that are only less than current date
+```{r filtering, echo=TRUE}
+VOICE.SURVEY.UPDRS = VOICE.SURVEY.UPDRS %>%
+  mutate(row_ID = 1:dim(VOICE.SURVEY.UPDRS)[1])
+tmp = na.omit(VOICE.SURVEY.UPDRS[,c('row_ID',updrsFeatures,AudioFeatures,CountdownFeatures)])
+             
+VOICE.SURVEY.UPDRS <- 
+  VOICE.SURVEY.UPDRS %>%
+  filter(row_ID %in% tmp$row_ID) %>%
+  filter(appVersion == 'version 1.0.5, build 12' | appVersion == 'version 1.0, build 7') %>%
+  filter(!is.na(professional.diagnosis)) %>%
+  filter(age <= 100 | !is.na(age)) %>%
+  filter(as.Date(createdDate) <= Sys.Date())
+
+VOICE.SURVEY.UPDRS
+```
+
+### Distribution of samples
+```{r data.diagnosis}
+# Plot number of case-control recordings
+VOICE.SURVEY.UPDRS.PerDate = split(VOICE.SURVEY.UPDRS,as.Date(VOICE.SURVEY.UPDRS$createdDate))
+VOICE.SURVEY.UPDRS.PerDate.PP = lapply(VOICE.SURVEY.UPDRS.PerDate, function(x){ split(x,x$healthCode) })
+
+nCaseControl = t(sapply(VOICE.SURVEY.UPDRS.PerDate.PP, function(x){  
+  tmp = sapply(x,function(x){ unique(x$professional.diagnosis) })  
+  return(c(total = length(x), control = sum(tmp == 'false'), case = sum(tmp == 'true')))
+}))
+colnames(nCaseControl) = c('Total','Control','Case')
+nCaseControl = rownameToFirstColumn(nCaseControl, 'Date')
+nCaseControl = melt(nCaseControl, 'Date')
+
+p = ggplot(nCaseControl, aes(x=factor(Date), y = value, group = factor(variable), color= factor(variable))) + geom_line()
+p = p + theme(axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size=18)) + xlab("Date") + ylab("Count") +  ggtitle("Number of case - control that have all voice, survey and updrs")
+p
+
+# Number of recordings per participant
+VOICE.SURVEY.UPDRS.PP = split(VOICE.SURVEY.UPDRS, factor(VOICE.SURVEY.UPDRS$healthCode))
+len.rec = sapply(VOICE.SURVEY.UPDRS.PP, function(x){dim(x)[1]})
+len.date = sapply(VOICE.SURVEY.UPDRS.PP, function(x){length(unique(x$uploadDate.voice))})
+
+H = data.frame(healthCode = names(VOICE.SURVEY.UPDRS.PP), 
+               nRecordings = sapply(VOICE.SURVEY.UPDRS.PP, function(x){return(dim(x)[1])}),
+               Dx = ifelse(sapply(VOICE.SURVEY.UPDRS.PP, function(x){return(unique(x$professional.diagnosis))}) == 'false',
+                           'Control','Case'))
+p <- ggplot(H,aes(nRecordings, fill=Dx)) + geom_density() +  ggtitle("PDF of recordings that have all voice, survey and updrs")
+p
+
+## Correlation between covariates and Dx
+COVARS = VOICE.SURVEY.UPDRS[,c(FactCovars,ContCovars)]
+COVARS = unique(COVARS)
+  
+writeLines('Correlation between Factor Variables')
+COVARS[,FactCovars] = lapply(COVARS[,FactCovars,drop=F], factor)
+g <- getAssociationStatistics(COVARS[,FactCovars])
+ggheatmap.show(g$plot, col.width=0.3, row.width=0.15)
+
+#COVARS[,ContCovars] = lapply(COVARS[,ContCovars,drop=F], as.numeric)
+writeLines('Correlation between Factor and Continuous Variables')
+COVARS[,c(FactCovars, ContCovars)] = lapply(COVARS[,c(FactCovars, ContCovars),drop=F], as.numeric)
+g <- getAssociationStatistics(COVARS[,c(FactCovars, ContCovars)])
+ggheatmap.show(g$plot, col.width=0.3, row.width=0.15)
+```
+
+### Effect of age
+```{r age.related.effects, fig.height=15, fig.width=15}
+VOICE.SURVEY.UPDRS[,FactCovars] = lapply(VOICE.SURVEY.UPDRS[,FactCovars], factor)
+VOICE.SURVEY.UPDRS[,ContCovars] = lapply(VOICE.SURVEY.UPDRS[,ContCovars], as.numeric)
+
+p <-list()
+for (i in updrsFeatures){
+  p[[i]] = ggplot(VOICE.SURVEY.UPDRS, aes_string(x = i, y = "age", fill = "professional.diagnosis")) +  geom_boxplot()
+}
+multiplot(plotlist=p,cols=4)
+```
+
+### PCA of phonation features
+```{r decompse.phonation.data, fig.height=20, fig.width=20}
+# Find principal components of audio phonation features
+PHONATION = t(as.matrix(VOICE.SURVEY.UPDRS[,AudioFeatures]))
+colnames(PHONATION) = 1:dim(PHONATION)[2]
+PC <- prcomp(PHONATION)
+
+# Plot all PCs
+p1 <- list()
+for (i in 1:5)
+  for (j in 1:5)
+    if (i == j){
+      plotdata = cbind(1:13,as.data.frame(PC$sdev))
+      colnames(plotdata) = c('PC','SDEV')
+      p <- ggplot(plotdata, aes(x=PC, y = SDEV)) + geom_bar(stat='identity')
+      p1 <- c(p1, list(p))
+    } else {
+      plotdata <- data.frame(UID=rownames(PC$rotation),
+                             PC1 = PC$rotation[,i],
+                             PC2 = PC$rotation[,j])
+      
+      plotdata <- cbind(plotdata, VOICE.SURVEY.UPDRS)
+      plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+      
+      p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+      p <- p + geom_point(aes(color=factor(professional.diagnosis), shape = factor(gender), size = factor(medical.usage)))
+      p <- p + theme_bw() + scale_size_manual(values = c(8,6,4,2)) + scale_shape_manual(values=1:3) + theme(legend.position="top") 
+      p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+      p1 <- c(p1, list(p))      
+    }
+multiplot(plotlist=p1,cols=5)  
+```
+
+### Store in synapse
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE}
+ActivityName <- 'UPDRS Analysis With Phonation Feature Analysis'
+  
+thisFileName <- 'UPDRS_Analysis.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/mPower_Data_Analysis", 
+                    ref="branch", 
+                    refName='master')
+
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Populate wiki with results
+CODE <- File('./UPDRS_Analysis.Rmd',name = 'UPDRS Analysis',parentId = parentId)
+CODE <- synStore(CODE, executed = thisFile, used = ALL_USED_IDs, activityName = ActivityName)
+```
