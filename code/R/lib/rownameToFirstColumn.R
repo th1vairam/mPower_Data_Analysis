@@ -4,4 +4,3 @@ rownameToFirstColumn <- function(DF,colname){
   DF <- DF[,c(dim(DF)[2],1:(dim(DF)[2]-1))]
   return(DF)
 }
-  
