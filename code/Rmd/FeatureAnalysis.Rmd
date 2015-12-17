@@ -24,16 +24,17 @@ library('ggplot2')
 library('reshape2')
 library('psych')
 library('fpc')
+library('RColorBrewer')
+library('knit2synapse')
 
-# devtools::install_github(repo = "knit2synapse-1", username = "th1vairam", ref="dev")
-# library(knit2synapse)
-# storeAndKnitToFileEntity('./FeatureAnalysis.Rmd', parentId = "syn4557550", entityName = "Phonation Feature Analysis")
+# knit2synapse::storeAndKnitToFileEntity('./FeatureAnalysis.Rmd', parentId = "syn4557550", entityName = 'Feature Analysis')
 
 ## Requires ggdendro
 devtools::source_url("https://raw.githubusercontent.com/chr1swallace/random-functions/master/R/ggplot-heatmap.R")
 
 synapseLogin()
-synapseCacheDir('/mPower')
+# synapseCacheDir('/mPower')
+paretnId = 'syn4557550'
 
 # source utility files from ../R/ folder
 file.sources = list.files('../R/lib/',pattern="*")
@@ -61,7 +62,6 @@ SURVEY = fread(synGet(SURVEY_ID)@filePath, data.table=F)
 UPDRS_ID = 'syn4726968'
 UPDRS = fread(synGet(UPDRS_ID)@filePath, data.table=F)
 ```
-
 ### Merge voice and survey
 ```{r merge.voice.survey}
 # Merge voice and survey data
@@ -72,11 +72,29 @@ VOICE.SURVEY = VOICE.SURVEY[complete.cases(VOICE.SURVEY[,grep('audio\\.',colname
                               complete.cases(VOICE.SURVEY[,grep('countdown\\.',colnames(VOICE.SURVEY),value=T)]),]
 colnames(VOICE.SURVEY) = sapply(colnames(VOICE.SURVEY), str_replace_all,'[^[:alnum:]]', '.')
 ```
+```{r var.of.int}
+# Covariates
+FactCovars =  c("appVersion.x", "phoneInfo.x", "momentInDayFormat.json.choiceAnswers", "calculatedMeds",
+                "are.caretaker", "deep.brain.stimulation", "diagnosis.year", "education", "employment", "gender", "healthcare.provider",
+                "maritalStatus", "medical.usage", "medical.usage.yesterday", "professional.diagnosis", "race",  
+                "smartphone", "smoked", "surgery")
+ContCovars =   c("onset.year", "age", "years.smoking")
+DateVars = c("createdOn.x")
+# Feature Sets
+AudioFeatures = c("audio.Median.F0", "audio.Mean.Jitter", "audio.Median.Jitter", "audio.Mean.Shimmer", "audio.Median.Shimmer",
+                "audio.MFCC.Band.1", "audio.MFCC.band.2", "audio.MFCC.band.3", "audio.MFCC.band.4", "audio.MFCC.Jitter.band.1.Positive",
+                "audio.MFCC.Jitter.band.2.Positive", "audio.MFCC.Jitter.band.3.Positive", "audio.MFCC.Jitter.band.4.Positive")
+CountdownFeatures = c("countdown.Median.F0", "countdown.Mean.Jitter", "countdown.Median.Jitter", "countdown.Mean.Shimmer",
+                "countdown.Median.Shimmer", "countdown.MFCC.Band.1", "countdown.MFCC.band.2", "countdown.MFCC.band.3",
+                "countdown.MFCC.band.4", "countdown.MFCC.Jitter.band.1.Positive", "countdown.MFCC.Jitter.band.2.Positive",
+                "countdown.MFCC.Jitter.band.3.Positive", "countdown.MFCC.Jitter.band.4.Positive")
+```
 
 ### Preprocess data
 * Retain recordings with 'version 1.0.5, build 12' and 'version 1.0, build 7'
 * Retain samples with non NA "professional-daignosis"
 * Retain samples with age less than 100
+* Retain samples that are only less than current date
 ```{r filtering, echo=TRUE}
 VOICE.SURVEY <- 
   VOICE.SURVEY %>%
@@ -87,7 +105,77 @@ VOICE.SURVEY <-
 ```
 `r length(REMOVED_RECORDS)` samples were removed from analysis
 
-```{r data.diagnosis}
+```{r data.diagnosis, fig.height=10, fig.width=10}
+# Plot number of case-control recordings
+tmp = split(VOICE.SURVEY,as.Date(VOICE.SURVEY$createdOn.x))
+nCaseControl = cbind(sapply(tmp, function(x){return(dim(x)[1])}),
+                     t(sapply(tmp, function(x){summary(factor(x$"professional.diagnosis"))})))
+colnames(nCaseControl) = c('Total','Control','Case')
+nCaseControl = rownameToFirstColumn(nCaseControl, 'Date')
+nCaseControl = melt(nCaseControl, 'Date')
+
+p = ggplot(nCaseControl, aes(x=factor(Date), y = value, group = factor(variable), color= factor(variable))) + geom_line()
+p = p + theme(axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size=18)) + xlab("Date") + ylab("Count") +  ggtitle("Number of case - control")
+p
+
+# Number of recordings per participant
+tmp = split(VOICE.SURVEY, factor(VOICE.SURVEY$healthCode))
+len.rec = sapply(tmp, function(x){dim(x)[1]})
+len.date = sapply(tmp, function(x){length(unique(x$uploadDate.x))})
+
+H = data.frame(healthCode = names(tmp), 
+               nRecordings = sapply(tmp, function(x){return(dim(x)[1])}),
+               Dx = ifelse(sapply(tmp, function(x){return(unique(x$professional.diagnosis))}) == 'false',
+                           'Control','Case'))
+p <- ggplot(H,aes(nRecordings, fill=Dx))+geom_density()
+p
+
+## Correlation between covariates and Dx
+COVARS = VOICE.SURVEY[,c(FactCovars,ContCovars)]
+rownames(COVARS) = VOICE.SURVEY$rowID
+  
+COVARS[,FactCovars] = lapply(COVARS[,FactCovars], factor)
+COVARS[,ContCovars] = lapply(COVARS[,ContCovars], as.numeric)
+
+g <- getAssociationStatistics(COVARS[1:1000,])
+ggheatmap.show(g$plot, col.width=0.3, row.width=0.15)
+```
+### PCA of phonation features
+```{r decompse.phonation.data, fig.height=8, fig.width=8}
+# Find principal components of audio phonation features
+PHONATION = t(as.matrix(VOICE.SURVEY[,AudioFeatures]))
+colnames(PHONATION) = VOICE.SURVEY$rowID
+PC <- prcomp(PHONATION[,1:1000])
+
+# Determine number of clusters automatically using pamk
+pam.cluster <- fpc::pamk(t(PHONATION[,1:1000]), krange=2:10)
+
+# Plot first 2 PCs
+plotdata <- data.frame(UID=rownames(PC$rotation), 
+                       PC1=PC$rotation[,1], 
+                       PC2=PC$rotation[,2], 
+                       cluster=pam.cluster$pamobject$clustering)
+
+plotdata <- cbind(plotdata, COVARS[1:1000,])
+plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
+
+p <- ggplot(plotdata, aes(x=PC1, y=PC2))
+p <- p + geom_point(aes(color=factor(cluster), shape=professional.diagnosis, size=gender))
+p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values=1:2) + theme(legend.position="top") 
+p <- p + geom_text(aes(label= labels), size=4, hjust=0)
+p
+```
+
+### Remove outliers
+* Retain recordings with healthCodes having atleast more than 2 recordings 
+```{r filtering, echo=TRUE}
+VOICE.SURVEY <- 
+  VOICE.SURVEY %>%
+  filter(healthCode %in% names(len.rec)[which(len.rec>2)]) %>%
+  filter(healthCode %in% names(len.date)[which(len.date>2)])
+```
+
+```{r data.diagnosis, fig.height=10, fig.width=10}
 # Plot number of case-control recordings
 tmp = split(VOICE.SURVEY,as.Date(VOICE.SURVEY$createdOn.x))
 nCaseControl = cbind(sapply(tmp, function(x){return(dim(x)[1])}),
@@ -108,38 +196,26 @@ H = data.frame(healthCode = names(tmp),
                            'Control','Case'))
 p <- ggplot(H,aes(nRecordings, fill=Dx))+geom_density()
 p
-```
 
-```{r plot.pca}
-FactCovars =  c("appVersion.x", "phoneInfo.x", "momentInDayFormat.json.choiceAnswers", "calculatedMeds",
-                "are.caretaker", "deep.brain.stimulation", "diagnosis.year", "education", "employment", "gender", "healthcare.provider",
-                "maritalStatus", "medical.usage", "medical.usage.yesterday", "professional.diagnosis", "race",  
-                "smartphone", "smoked", "surgery")
-ContCovars =   c("onset.year", "age", "years.smoking")
-DateVars = c("createdOn.x")
-AudioFeatures = c("audio.Median.F0", "audio.Mean.Jitter", "audio.Median.Jitter", "audio.Mean.Shimmer", "audio.Median.Shimmer",
-                "audio.MFCC.Band.1", "audio.MFCC.band.2", "audio.MFCC.band.3", "audio.MFCC.band.4", "audio.MFCC.Jitter.band.1.Positive",
-                "audio.MFCC.Jitter.band.2.Positive", "audio.MFCC.Jitter.band.3.Positive", "audio.MFCC.Jitter.band.4.Positive")
-CountdownFeatures = c("countdown.Median.F0", "countdown.Mean.Jitter", "countdown.Median.Jitter", "countdown.Mean.Shimmer",
-                "countdown.Median.Shimmer", "countdown.MFCC.Band.1", "countdown.MFCC.band.2", "countdown.MFCC.band.3",
-                "countdown.MFCC.band.4", "countdown.MFCC.Jitter.band.1.Positive", "countdown.MFCC.Jitter.band.2.Positive",
-                "countdown.MFCC.Jitter.band.3.Positive", "countdown.MFCC.Jitter.band.4.Positive")
-
+## Correlation between covariates and Dx
 COVARS = VOICE.SURVEY[,c(FactCovars,ContCovars)]
+rownames(COVARS) = VOICE.SURVEY$rowID
+  
 COVARS[,FactCovars] = lapply(COVARS[,FactCovars], factor)
 COVARS[,ContCovars] = lapply(COVARS[,ContCovars], as.numeric)
 
-g <- getAssociationStatistics(COVARS[,-(grep('race',colnames(COVARS)))])
+g <- getAssociationStatistics(COVARS[1:1000,])
 ggheatmap.show(g$plot, col.width=0.3, row.width=0.15)
 ```
 
 ```{r decompse.phonation.data, fig.height=8, fig.width=8}
 # Find principal components of audio phonation features
 PHONATION = t(as.matrix(VOICE.SURVEY[,AudioFeatures]))
-PC <- prcomp(PHONATION)
+colnames(PHONATION) = VOICE.SURVEY$rowID
+PC <- prcomp(PHONATION[,1:1000])
 
 # Determine number of clusters automatically using pamk
-pam.cluster <- fpc::pamk(t(PHONATION), krange=2:10)
+pam.cluster <- fpc::pamk(t(PHONATION[,1:1000]), krange=2:10)
 
 # Plot first 2 PCs
 plotdata <- data.frame(UID=rownames(PC$rotation), 
@@ -147,51 +223,31 @@ plotdata <- data.frame(UID=rownames(PC$rotation),
                        PC2=PC$rotation[,2], 
                        cluster=pam.cluster$pamobject$clustering)
 
-plotdata <- merge(plotdata, METADATA, by="UID")
+plotdata <- cbind(plotdata, COVARS[1:1000,])
 plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
 
 p <- ggplot(plotdata, aes(x=PC1, y=PC2))
-p <- p + geom_point(aes(color=factor(cluster), shape=Diffname_short, size=Gender))
-p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values=1:7) + theme(legend.position="top") 
+p <- p + geom_point(aes(color=factor(cluster), shape=professional.diagnosis, size=gender))
+p <- p + theme_bw() + scale_size_manual(values = c(4, 2)) + scale_shape_manual(values=1:2) + theme(legend.position="top") 
 p <- p + geom_text(aes(label= labels), size=4, hjust=0)
 p
 ```
 
-```{r find.case.control, fig.width=16,fig.height=10}
-FEATURES = dplyr::mutate(FEATURES, createdDate = as.Date(createdOn))
+### Store in synapse
+```{r synapsestore, echo=FALSE, include=FALSE, eval=TRUE}
+ActivityName <- 'Phonation Feature Analysis'
+  
+thisFileName <- 'FeatureAnalysis.Rmd'
+  
+# Github link
+thisRepo <- getRepo(repository = "th1vairam/mPower_Data_Analysis", 
+                    ref="branch", 
+                    refName='master')
 
-featuresDateWise = split(FEATURES, FEATURES$createdDate)
-tmp = sapply(featuresDateWise, function(x){
-  return(data.frame(case = sum(x$professional_diagnosis, na.rm=T),
-                    control = sum(!x$professional_diagnosis, na.rm=T)))
-})
-tmp = rownameToFirstColumn(as.data.frame(t(tmp)),'createdDate')
-tmp$case = as.numeric(tmp$case)
-tmp$control = as.numeric(tmp$control)
-tmp = reshape::melt(tmp, id.vars = 1, measure.vars = 2:3)
+thisFile <- getPermlink(repository = thisRepo,
+                        repositoryPath=paste0('code/Rmd/', thisFileName))
+    
+# Populate wiki with results
+CODE <- Folder(name = 'Feature Analysis',parentId = parentId)
+CODE <- synStore(CODE)
 ```
-```{r pca.features, fid.width = 10, fig.height=10}
-# Find principal components of expression to plot
-tmp = dplyr::select(FEATURES, audio_Median_F0, audio_Mean_Jitter, audio_Median_Jitter, audio_Mean_Shimmer, 
-                    audio_Median_Shimmer, audio_MFCC_Band_1, audio_MFCC_band_2, audio_MFCC_band_3, audio_MFCC_band_4,
-                    audio_MFCC_Jitter_band_1_Positive, audio_MFCC_Jitter_band_2_Positive, audio_MFCC_Jitter_band_3_Positive,
-                    audio_MFCC_Jitter_band_4_Positive)
-tmp = t(as.matrix(tmp))
-colnames(tmp) = FEATURES$recordId
-PC = prcomp(tmp)
-
-# Plot first 2 PCs
-plotdata <- data.frame(recordId=rownames(PC$rotation), 
-                       PC1=PC$rotation[,1], 
-                       PC2=PC$rotation[,2])
-
-plotdata <- merge(plotdata, FEATURES, by="recordId")
-plotdata <- mutate(plotdata, labels = '');#ifelse(Diffname_short == '',as.character(UID),'')) 
-
-p <- ggplot(plotdata, aes(x=PC1, y=PC2))
-p <- p + geom_point(aes(color = professional_diagnosis))
-p <- p + theme_bw() + scale_size_manual(values = c(5, 2)) + scale_shape_manual(values = 1:7) + theme(legend.position="top") 
-p <- p + geom_text(aes(label= labels), size=4, hjust=0)
-p
-```
-
