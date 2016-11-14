@@ -9,8 +9,8 @@ addpath('/mnt/Github/PDScores/bridge_ufb (original)')
 %% Input parameters
 WORKING_DIR = '/mnt/Github/mPower_Data_Analysis/code/';
 SOURCE_TBL = 'syn4590865';
-FEATURE_TBL = 'syn5555323';
-COLUMN_NAME = 'audio_audio.m4a';
+FEATURE_TBL = 'syn5555323';%'syn5557868';%'syn5555323';
+COLUMN_NAME = 'audio_countdown.m4a';
 
 %% Extract all unfinished rowIDs, rowVersions and recordIDs from synapse table "syn4590865"
 [a,b] = system(['Rscript ',...
@@ -22,7 +22,7 @@ COLUMN_NAME = 'audio_audio.m4a';
 All_recordIds = readtable([WORKING_DIR,...
     'Matlab/AllRecordIds.txt'], 'Delimiter','\t');
 
-%% Extract features from audio_audio.m4a files (converted to wav form)
+%% Extract features from audio_*.m4a files (converted to wav form)
 nbatch = ceil(size(All_recordIds, 1)/100);
 for batch = 1:nbatch
     % Get first 100 records
@@ -68,7 +68,7 @@ for batch = 1:nbatch
         'MFCC_Band_1','MFCC_Band_2','MFCC_Band_3','MFCC_Band_4','MFCC_Jitter_Band_1_Positive',...
         'MFCC_Jitter_Band_2_Positive','MFCC_Jitter_Band_3_Positive','MFCC_Jitter_Band_4_Positive'});
     Audio_Features = [wavFileNames(ind,:), Audio_Features];
-    writetable(Audio_Features, ['/mPower/AudioFeatures_W_Trimming/Audio_Features_Batch_',num2str(batch),'.csv'],...
+    writetable(Audio_Features, ['/mPower/CountdownFeatures_WO_Trimming/Countdown_Features_Batch_',num2str(batch),'.csv'],...
         'Delimiter', ',', 'WriteRownames',false);
 
     % Clean synapseCache
@@ -85,7 +85,7 @@ for batch = 1:nbatch
         WORKING_DIR,'R/uploadFeatures2Table.R ',...
         SOURCE_TBL,' ',...
         FEATURE_TBL,' ',...
-        ['/mPower/AudioFeatures_W_Trimming/Audio_Features_Batch_',num2str(batch),'.csv'],' ',...
+        ['/mPower/CountdownFeatures_WO_Trimming/Countdown_Features_Batch_',num2str(batch),'.csv'],' ',...
         WORKING_DIR]);
 
     display(strcat('Completed batch ',num2str(batch)));
